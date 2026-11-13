@@ -1,5 +1,5 @@
 /* Daily Log — Service Worker */
-const CACHE_NAME = 'daily-log-v2';
+const CACHE_NAME = 'daily-log-v3';
 const CORE_ASSETS = [
   './',
   './index.html',

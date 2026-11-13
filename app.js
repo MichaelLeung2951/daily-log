@@ -583,6 +583,10 @@ function initSW() {
 
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
+  // Deep link support: index.html?date=YYYY-MM-DD
+  const paramDate = new URLSearchParams(location.search).get('date');
+  if (paramDate && isValidDateStr(paramDate)) currentDate = paramDate;
+
   initTheme();
   initDateNav();
   initForm();

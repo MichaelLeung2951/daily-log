@@ -29,6 +29,7 @@ const $ = (id) => document.getElementById(id);
 /* ---------- State ---------- */
 let entries = loadEntries();
 let viewMonth = toDateStr(new Date()).slice(0, 7); // YYYY-MM
+let selectedDay = null; // YYYY-MM-DD
 
 function loadEntries() {
   try {
@@ -103,6 +104,7 @@ function shiftMonth(delta) {
   const [y, m] = viewMonth.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
   viewMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  selectedDay = null; // details collapse when month changes
   render();
 }
 
@@ -132,30 +134,120 @@ function render() {
     ? `${Number(busyDay.slice(8, 10))} (${busyCount})`
     : '–';
 
-  renderDailyChart(list, perDay);
+  renderCalendar(list, perDay);
+  renderDayDetails(list);
   renderCategories(list, totalMins);
   renderMedAdherence(list);
   renderHighlights(list);
 }
 
-function renderDailyChart(list, perDay) {
+/* ---------- Calendar with tap-to-expand details ---------- */
+function renderCalendar(list, perDay) {
+  const grid = $('calendarGrid');
+  grid.innerHTML = '';
   const days = monthDays(viewMonth);
-  const wrap = $('dailyChart');
-  const axis = $('dailyAxis');
-  wrap.innerHTML = '';
-  const maxCount = Math.max(1, ...Object.values(perDay));
-  const elapsed = daysElapsedInMonth(viewMonth);
+  const [y, m] = viewMonth.split('-').map(Number);
+  const firstWeekday = new Date(y, m - 1, 1).getDay(); // 0 = Sunday
+  const todayStr = toDateStr(new Date());
+
+  // Leading blank cells
+  for (let i = 0; i < firstWeekday; i++) {
+    const blank = document.createElement('div');
+    blank.className = 'aspect-square';
+    grid.appendChild(blank);
+  }
 
   for (let d = 1; d <= days; d++) {
     const dateStr = `${viewMonth}-${String(d).padStart(2, '0')}`;
     const count = perDay[dateStr] || 0;
-    const bar = document.createElement('div');
-    const hPct = count === 0 ? 0 : Math.max(8, Math.round((count / maxCount) * 100));
-    bar.className = 'flex-1 flex flex-col justify-end h-full rounded-t';
-    bar.innerHTML = `<div class="rounded-t ${count === 0 ? 'bg-slate-200 dark:bg-slate-700' : d > elapsed ? 'bg-indigo-300 dark:bg-indigo-700' : 'bg-indigo-500'}" style="height:${hPct}%" title="${d}: ${count} ${count === 1 ? 'activity' : 'activities'}"></div>`;
-    wrap.appendChild(bar);
+
+    // Heat scale by activity count
+    let heat;
+    if (count === 0) heat = 'bg-slate-50 dark:bg-slate-700/40 text-slate-400 dark:text-slate-500';
+    else if (count === 1) heat = 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-200';
+    else if (count <= 3) heat = 'bg-indigo-200 dark:bg-indigo-800 text-indigo-800 dark:text-indigo-100';
+    else if (count <= 5) heat = 'bg-indigo-300 dark:bg-indigo-600 text-indigo-900 dark:text-white';
+    else heat = 'bg-indigo-500 dark:bg-indigo-400 text-white dark:text-slate-900';
+
+    const isSelected = selectedDay === dateStr;
+    const isToday = dateStr === todayStr;
+
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.dataset.date = dateStr;
+    cell.className = `relative aspect-square rounded-lg flex flex-col items-center justify-center text-xs font-semibold transition ${heat} ${isSelected ? 'ring-2 ring-indigo-500 dark:ring-indigo-300 ring-offset-1 dark:ring-offset-slate-800' : ''} ${isToday ? 'underline decoration-2 underline-offset-2' : ''} hover:opacity-80 active:opacity-70 min-h-[40px]`;
+    cell.setAttribute('aria-label', `${dateStr}, ${count} ${count === 1 ? 'activity' : 'activities'}`);
+    cell.innerHTML = `
+      <span class="leading-none">${d}</span>
+      ${count > 0 ? `<span class="text-[9px] font-bold opacity-80 leading-none mt-0.5">${count}</span>` : ''}`;
+    grid.appendChild(cell);
   }
-  axis.innerHTML = `<span>1</span><span>${Math.round(days / 2)}</span><span>${days}</span>`;
+}
+
+// Single delegated listener — survives calendar re-renders
+document.addEventListener('click', (e) => {
+  const cell = e.target.closest('#calendarGrid button[data-date]');
+  if (!cell) return;
+  const date = cell.dataset.date;
+  selectedDay = selectedDay === date ? null : date; // tap again to collapse
+  render();
+  if (selectedDay) {
+    $('dayDetailSection').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+});
+
+function renderDayDetails(list) {
+  const section = $('dayDetailSection');
+  if (!selectedDay) { section.classList.add('hidden'); return; }
+
+  const dayEntries = list
+    .filter(e => e.date === selectedDay)
+    .sort((a, b) => a.start.localeCompare(b.start));
+
+  const totalMins = dayEntries.reduce((s, e) => s + durationMinutes(e.start, e.end), 0);
+  const [dy, dm, dd] = selectedDay.split('-').map(Number);
+  const dateLabel = new Date(dy, dm - 1, dd).toLocaleDateString(undefined, {
+    weekday: 'long', month: 'short', day: 'numeric',
+  });
+
+  $('dayDetailTitle').textContent = dateLabel;
+  $('dayDetailSummary').textContent = dayEntries.length
+    ? `${dayEntries.length} ${dayEntries.length === 1 ? 'activity' : 'activities'}${totalMins > 0 ? ` · ${formatDuration(totalMins)} of tracked time` : ''}`
+    : '';
+  $('dayDetailLink').href = `index.html?date=${selectedDay}`;
+
+  const box = $('dayDetailList');
+  box.innerHTML = '';
+
+  if (dayEntries.length === 0) {
+    box.innerHTML = '<p class="text-sm text-slate-400 dark:text-slate-500 text-center py-4">Nothing logged on this day.</p>';
+  } else {
+    for (const entry of dayEntries) {
+      const cat = CAT_STYLES[entry.category] || CAT_STYLES.Other;
+      const mins = durationMinutes(entry.start, entry.end);
+      const item = document.createElement('div');
+      item.className = 'flex items-start gap-3 rounded-xl bg-slate-50 dark:bg-slate-700/60 px-3 py-2.5';
+      item.innerHTML = `
+        <div class="shrink-0 text-center pt-0.5">
+          <p class="text-xs font-bold tabular-nums">${escapeHtml(entry.start)}</p>
+          <p class="text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">${mins > 0 ? formatDuration(mins) : '–'}</p>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium leading-snug break-words">${escapeHtml(entry.title)}</p>
+          <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">${cat.label}</p>
+          ${entry.notes ? `<p class="text-xs text-slate-500 dark:text-slate-400 mt-1 whitespace-pre-wrap break-words">${escapeHtml(entry.notes)}</p>` : ''}
+        </div>`;
+      box.appendChild(item);
+    }
+  }
+
+  section.classList.remove('hidden');
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function renderCategories(list, totalMins) {
